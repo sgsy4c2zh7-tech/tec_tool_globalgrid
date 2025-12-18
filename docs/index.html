@@ -3,88 +3,126 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>Solar CH Rotation Viewer (27-day)</title>
-
+<title>Solar CH Rotation Viewer (±27d)</title>
 <style>
-body{
-  margin:0;
-  font-family:system-ui,-apple-system,"Segoe UI",sans-serif;
-  background:#050816;color:#f5f5f5
-}
-.top{padding:12px}
-.badge{
-  display:inline-block;padding:4px 10px;border-radius:999px;
-  background:rgba(255,255,255,.12);font-size:12px;margin-right:6px
-}
-#panel{padding:12px}
-#img{width:100%;max-width:900px;border-radius:12px;border:1px solid rgba(255,255,255,.12);background:#000}
-.controls{display:flex;gap:10px;align-items:center;margin-top:12px}
-input[type=range]{flex:1}
-button{padding:6px 14px;border-radius:10px;border:0;background:#2f6bff;color:#fff;cursor:pointer}
-.small{font-size:13px;opacity:.85;margin-top:6px}
+  body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",sans-serif;background:#050816;color:#f5f5f5}
+  .top{padding:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  .badge{display:inline-block;padding:4px 10px;border-radius:999px;background:rgba(255,255,255,.12);font-size:12px}
+  .wrap{padding:12px}
+  #img{width:100%;max-width:980px;border-radius:14px;border:1px solid rgba(255,255,255,.12);background:#000}
+  .controls{display:flex;gap:10px;align-items:center;margin-top:12px;max-width:980px}
+  input[type=range]{flex:1}
+  button{padding:7px 14px;border-radius:12px;border:0;background:#2f6bff;color:#fff;cursor:pointer}
+  .meta{max-width:980px;margin-top:8px;font-size:13px;opacity:.88;line-height:1.5}
+  .row{display:flex;gap:8px;flex-wrap:wrap}
 </style>
 </head>
-
 <body>
-<div class="top">
-  <span class="badge">Solar Rotation ~27 days</span>
-  <span class="badge" id="mode"></span>
-</div>
-
-<div id="panel">
-  <img id="img"/>
-  <div class="controls">
-    <button id="play">▶</button>
-    <input id="slider" type="range"/>
+  <div class="top">
+    <span class="badge">Solar Rotation Proxy</span>
+    <span class="badge" id="badgeMode">-</span>
+    <span class="badge" id="badgeDate">-</span>
+    <span class="badge" id="badgeOffset">-</span>
   </div>
-  <div class="small" id="info"></div>
-</div>
+
+  <div class="wrap">
+    <img id="img" alt="solar"/>
+    <div class="controls">
+      <button id="btnPlay">▶</button>
+      <input id="slider" type="range" min="0" max="0" value="0"/>
+      <button id="btnPrev">⟵</button>
+      <button id="btnNext">⟶</button>
+    </div>
+
+    <div class="meta">
+      <div class="row">
+        <span class="badge">Speed</span>
+        <input id="speed" type="range" min="100" max="1200" step="50" value="450" />
+        <span id="speedVal" class="badge">450 ms</span>
+      </div>
+      <div id="note"></div>
+    </div>
+  </div>
 
 <script>
 let frames = [];
-let timer = null;
 let idx = 0;
+let timer = null;
 
-fetch('manifest.json')
-.then(r=>r.json())
-.then(m=>{
-  frames = m.frames;
-  const slider = document.getElementById('slider');
-  slider.min = 0;
-  slider.max = frames.length - 1;
-  slider.value = frames.findIndex(f=>f.offset===0);
-  idx = slider.value;
-  update();
-});
+const img = document.getElementById('img');
+const slider = document.getElementById('slider');
+const badgeMode = document.getElementById('badgeMode');
+const badgeDate = document.getElementById('badgeDate');
+const badgeOffset = document.getElementById('badgeOffset');
+const note = document.getElementById('note');
+
+const btnPlay = document.getElementById('btnPlay');
+const btnPrev = document.getElementById('btnPrev');
+const btnNext = document.getElementById('btnNext');
+
+const speed = document.getElementById('speed');
+const speedVal = document.getElementById('speedVal');
+
+function fmtOffset(o){ return `D${o>=0?'+':''}${o}`; }
 
 function update(){
   const f = frames[idx];
-  document.getElementById('img').src = `imgs/${f.date}.png`;
-  document.getElementById('mode').textContent =
-    f.type === "observed" ? "OBSERVED" : "FORECAST (27-day proxy)";
-  document.getElementById('info').textContent =
-    `Date: ${f.date} | Offset: D${f.offset>=0?'+':''}${f.offset}`;
-  document.getElementById('slider').value = idx;
+  img.src = `imgs/${f.date}.png`;
+
+  badgeDate.textContent = `UTC ${f.date}`;
+  badgeOffset.textContent = fmtOffset(f.offset);
+
+  if (f.type === "observed"){
+    badgeMode.textContent = "OBSERVED";
+    note.textContent = "Observed: latest day and past 27 days.";
+  } else {
+    badgeMode.textContent = "FORECAST (27-day proxy)";
+    note.textContent = "Forecast/proxy: future frames reuse images from 26–27 days before (solar rotation).";
+  }
+
+  slider.value = idx;
 }
 
-document.getElementById('slider').oninput = e=>{
-  idx = +e.target.value;
+function step(dir){
+  idx = (idx + dir + frames.length) % frames.length;
   update();
-};
+}
 
-document.getElementById('play').onclick = ()=>{
-  if(timer){
-    clearInterval(timer);
-    timer = null;
-    play.textContent = "▶";
-  }else{
-    timer = setInterval(()=>{
-      idx = (idx + 1) % frames.length;
-      update();
-    }, 500);
-    play.textContent = "⏸";
-  }
-};
+function stop(){
+  if (timer){ clearInterval(timer); timer = null; }
+  btnPlay.textContent = "▶";
+}
+
+function play(){
+  stop();
+  const ms = parseInt(speed.value,10);
+  timer = setInterval(()=>step(+1), ms);
+  btnPlay.textContent = "⏸";
+}
+
+btnPlay.onclick = ()=> timer ? stop() : play();
+btnPrev.onclick = ()=>{ stop(); step(-1); };
+btnNext.onclick = ()=>{ stop(); step(+1); };
+
+slider.oninput = e=>{ stop(); idx = +e.target.value; update(); };
+
+speed.oninput = ()=>{ speedVal.textContent = `${speed.value} ms`; if(timer) play(); };
+
+fetch('manifest.json')
+  .then(r=>r.json())
+  .then(m=>{
+    frames = m.frames;
+    slider.max = frames.length - 1;
+
+    // offset=0 を中心に
+    const zero = frames.findIndex(x => x.offset === 0);
+    idx = zero >= 0 ? zero : 0;
+
+    update();
+  })
+  .catch(err=>{
+    note.textContent = "manifest.json load failed: " + err;
+  });
 </script>
 </body>
 </html>
