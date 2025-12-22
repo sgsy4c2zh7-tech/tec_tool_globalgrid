@@ -1,32 +1,47 @@
-
 name: Update Solar CH Rotation Viewer
 
 on:
-  workflow_dispatch:
   schedule:
-    - cron: "15 0 * * *"   # 毎日 00:15 UTC
+    # 毎日 03:00 UTC（= JST 12:00）
+    - cron: "0 3 * * *"
+  workflow_dispatch:
 
 permissions:
   contents: write
+  pages: write
+  id-token: write
 
 jobs:
   update:
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+    steps:
+      # ① リポジトリを取得
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ② Node.js セットアップ
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
           node-version: "20"
 
-      - name: Fetch images + build manifest
+      # ③ 既存：CH画像 & manifest.json 生成
+      - name: Fetch solar CH images and manifest
         run: |
           node scripts/hv_fetch.js
 
-      - name: Commit & push if changed
+      # ④ ★追加：Boulder synoptic map 取得（←ここが今回の主役）
+      - name: Fetch Boulder synoptic drawings
         run: |
-          git config user.name "github-actions"
+          node scripts/boulder_fetch.js
+
+      # ⑤ 変更があれば commit
+      - name: Commit updated images
+        run: |
+          git config user.name "actions-user"
           git config user.email "actions@github.com"
-          git add docs/imgs docs/manifest.json
-          git commit -m "Update solar images + manifest" || echo "No changes"
+
+          git add docs
+          git diff --cached --quiet || git commit -m "Update solar images + Boulder maps"
           git push
