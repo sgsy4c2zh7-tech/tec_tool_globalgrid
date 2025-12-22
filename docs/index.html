@@ -3,38 +3,57 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>Solar CH Rotation Viewer (±27d)</title>
+<title>Solar Rotation Viewer (±27d)</title>
 <style>
+  *{box-sizing:border-box}
   body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",sans-serif;background:#050816;color:#f5f5f5}
   .top{padding:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center}
   .badge{display:inline-block;padding:4px 10px;border-radius:999px;background:rgba(255,255,255,.12);font-size:12px}
   .wrap{padding:12px}
-  #img{width:100%;max-width:980px;border-radius:14px;border:1px solid rgba(255,255,255,.12);background:#000;display:block}
+  #img{width:100%;max-width:980px;border-radius:14px;border:1px solid rgba(255,255,255,.12);background:#000}
   .controls{display:flex;gap:10px;align-items:center;margin-top:12px;max-width:980px}
   input[type=range]{flex:1}
   button{padding:7px 14px;border-radius:12px;border:0;background:#2f6bff;color:#fff;cursor:pointer}
-  button:disabled{opacity:.5;cursor:not-allowed}
-  .meta{max-width:980px;margin-top:8px;font-size:13px;opacity:.9;line-height:1.6;white-space:pre-wrap}
+  select{padding:7px 10px;border-radius:12px;border:1px solid rgba(255,255,255,.18);background:rgba(255,255,255,.06);color:#fff}
+  .meta{max-width:980px;margin-top:8px;font-size:13px;opacity:.9;line-height:1.5}
   .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
-  .dim{opacity:.75}
+  .hr{max-width:980px;height:1px;background:rgba(255,255,255,.12);margin:10px 0}
+  a{color:#9cc0ff}
 </style>
 </head>
 <body>
   <div class="top">
-    <span class="badge">Solar Rotation Proxy</span>
+    <span class="badge">Solar Viewer</span>
+
+    <span class="badge">Dataset</span>
+    <select id="dataset">
+      <option value="ch">CH (local png)</option>
+      <option value="boulder">Boulder drawing (local jpg)</option>
+    </select>
+
     <span class="badge" id="badgeMode">-</span>
-    <span class="badge" id="badgeDate">-</span>
+    <span class="badge" id="badgeTarget">Target: -</span>
+    <span class="badge" id="badgeSource">Source: -</span>
     <span class="badge" id="badgeOffset">-</span>
-    <span class="badge dim" id="badgeBase">base: -</span>
   </div>
 
   <div class="wrap">
+    <div class="meta">
+      <div class="row">
+        <span class="badge" id="badgeObservedRange">Observed: -</span>
+        <span class="badge" id="badgeForecastRange">Forecast: -</span>
+        <span class="badge" id="badgeLatest">Latest: -</span>
+      </div>
+      <div class="hr"></div>
+    </div>
+
     <img id="img" alt="solar"/>
+
     <div class="controls">
-      <button id="btnPlay" disabled>▶</button>
-      <input id="slider" type="range" min="0" max="0" value="0" disabled/>
-      <button id="btnPrev" disabled>⟵</button>
-      <button id="btnNext" disabled>⟶</button>
+      <button id="btnPlay">▶</button>
+      <input id="slider" type="range" min="0" max="0" value="0"/>
+      <button id="btnPrev">⟵</button>
+      <button id="btnNext">⟶</button>
     </div>
 
     <div class="meta">
@@ -43,162 +62,182 @@
         <input id="speed" type="range" min="100" max="1200" step="50" value="450" />
         <span id="speedVal" class="badge">450 ms</span>
       </div>
-      <div id="status">loading...</div>
+      <div id="note"></div>
+      <div id="debug" style="margin-top:6px;opacity:.85"></div>
     </div>
   </div>
 
 <script>
-(() => {
-  // ====== state ======
-  let frames = [];
-  let idx = 0;
-  let timer = null;
+let frames = [];
+let idx = 0;
+let timer = null;
+let latestStr = null; // YYYYMMDD
 
-  // ====== elements ======
-  const img = document.getElementById('img');
-  const slider = document.getElementById('slider');
-  const badgeMode = document.getElementById('badgeMode');
-  const badgeDate = document.getElementById('badgeDate');
-  const badgeOffset = document.getElementById('badgeOffset');
-  const badgeBase = document.getElementById('badgeBase');
-  const status = document.getElementById('status');
+const img = document.getElementById('img');
+const slider = document.getElementById('slider');
+const badgeMode = document.getElementById('badgeMode');
+const badgeTarget = document.getElementById('badgeTarget');
+const badgeSource = document.getElementById('badgeSource');
+const badgeOffset = document.getElementById('badgeOffset');
 
-  const btnPlay = document.getElementById('btnPlay');
-  const btnPrev = document.getElementById('btnPrev');
-  const btnNext = document.getElementById('btnNext');
+const badgeObservedRange = document.getElementById('badgeObservedRange');
+const badgeForecastRange = document.getElementById('badgeForecastRange');
+const badgeLatest = document.getElementById('badgeLatest');
 
-  const speed = document.getElementById('speed');
-  const speedVal = document.getElementById('speedVal');
+const note = document.getElementById('note');
+const debug = document.getElementById('debug');
 
-  // ====== helpers ======
-  const fmtOffset = (o) => `D${o>=0?'+':''}${o}`;
+const btnPlay = document.getElementById('btnPlay');
+const btnPrev = document.getElementById('btnPrev');
+const btnNext = document.getElementById('btnNext');
 
-  // Pagesで「どこが公開ルートか」ブレても耐えるために、
-  // index.html 自身のあるディレクトリを base にする。
-  // 例: https://.../solar_ch/ でも https://.../solar_ch/index.html でもOK
-  const baseDir = (() => {
-    const u = new URL(location.href);
-    // パス末尾が / でない場合（index.html等）→ そのディレクトリに丸める
-    if (!u.pathname.endsWith('/')) {
-      u.pathname = u.pathname.replace(/\/[^\/]*$/, '/');
+const speed = document.getElementById('speed');
+const speedVal = document.getElementById('speedVal');
+
+const dataset = document.getElementById('dataset');
+
+function fmtOffset(o){ return `D${o>=0?'+':''}${o}`; }
+
+function ymdToDateUTC(ymd){
+  const y = parseInt(ymd.slice(0,4),10);
+  const m = parseInt(ymd.slice(4,6),10) - 1;
+  const d = parseInt(ymd.slice(6,8),10);
+  return new Date(Date.UTC(y,m,d));
+}
+function dateToYmdUTC(dt){
+  const y = dt.getUTCFullYear();
+  const m = String(dt.getUTCMonth()+1).padStart(2,'0');
+  const d = String(dt.getUTCDate()).padStart(2,'0');
+  return `${y}${m}${d}`;
+}
+function dateToNice(dt){
+  const y = dt.getUTCFullYear();
+  const m = String(dt.getUTCMonth()+1).padStart(2,'0');
+  const d = String(dt.getUTCDate()).padStart(2,'0');
+  return `${y}-${m}-${d}`;
+}
+function addDaysUTC(dt, days){
+  const t = new Date(dt.getTime());
+  t.setUTCDate(t.getUTCDate() + days);
+  return t;
+}
+
+function computeRanges(){
+  if(!latestStr || !frames.length) return;
+
+  const latest = ymdToDateUTC(latestStr);
+  const offsets = frames.map(f=>f.offset);
+  const minO = Math.min(...offsets);
+  const maxO = Math.max(...offsets);
+
+  const obsStart = addDaysUTC(latest, minO);
+  const obsEnd   = addDaysUTC(latest, 0);
+  const fcStart  = addDaysUTC(latest, 1);
+  const fcEnd    = addDaysUTC(latest, maxO);
+
+  badgeLatest.textContent = `Latest: ${dateToNice(latest)} (UTC)`;
+  badgeObservedRange.textContent = `Observed: ${dateToNice(obsStart)} → ${dateToNice(obsEnd)}`;
+  badgeForecastRange.textContent = `Forecast: ${dateToNice(fcStart)} → ${dateToNice(fcEnd)}`;
+}
+
+function buildSrc(ds, ymd){
+  // ds=ch => ./imgs/YYYYMMDD.png
+  // ds=boulder => ./boulder/YYYYMMDD.jpg
+  if(ds === "boulder") return `./boulder/${ymd}.jpg`;
+  return `./imgs/${ymd}.png`;
+}
+
+function update(){
+  if (!frames.length) return;
+
+  const f = frames[idx];
+  const latest = ymdToDateUTC(latestStr);
+
+  const targetDate = addDaysUTC(latest, f.offset);
+  const targetYMD = dateToYmdUTC(targetDate);
+
+  // manifestの f.date は「表示に使う画像の日付（source）」として扱う
+  const sourceYMD = f.date;
+
+  badgeOffset.textContent = fmtOffset(f.offset);
+  badgeTarget.textContent = `Target: ${targetYMD}`;
+  badgeSource.textContent = `Source: ${sourceYMD}`;
+
+  if (f.type === "observed"){
+    badgeMode.textContent = "OBSERVED";
+    note.textContent = "Observed: actual daily image.";
+  } else {
+    badgeMode.textContent = "FORECAST (27-day proxy)";
+    note.textContent = "Forecast/proxy: future frames reuse images from 26–27 days before (solar rotation).";
+  }
+
+  const ds = dataset.value;
+  const src = buildSrc(ds, sourceYMD);
+
+  img.onload = () => {
+    debug.textContent = `OK: ${src}`;
+  };
+  img.onerror = () => {
+    debug.innerHTML =
+      `IMAGE load failed: <code>${src}</code><br>` +
+      `Check: (1) Pages source is /docs (2) file exists under docs/ (3) filename matches.`;
+  };
+
+  img.src = src;
+  slider.value = idx;
+}
+
+function step(dir){
+  idx = (idx + dir + frames.length) % frames.length;
+  update();
+}
+
+function stop(){
+  if (timer){ clearInterval(timer); timer = null; }
+  btnPlay.textContent = "▶";
+}
+
+function play(){
+  stop();
+  const ms = parseInt(speed.value,10);
+  timer = setInterval(()=>step(+1), ms);
+  btnPlay.textContent = "⏸";
+}
+
+btnPlay.onclick = ()=> timer ? stop() : play();
+btnPrev.onclick = ()=>{ stop(); step(-1); };
+btnNext.onclick = ()=>{ stop(); step(+1); };
+
+slider.oninput = e=>{ stop(); idx = +e.target.value; update(); };
+
+speed.oninput = ()=>{ speedVal.textContent = `${speed.value} ms`; if(timer) play(); };
+
+dataset.onchange = ()=>{ stop(); update(); };
+
+fetch('./manifest.json', { cache: 'no-store' })
+  .then(r => {
+    if(!r.ok) throw new Error(`HTTP ${r.status} while loading manifest.json`);
+    return r.json();
+  })
+  .then(m=>{
+    if(!m.frames || !Array.isArray(m.frames) || m.frames.length===0){
+      throw new Error("manifest.json has no frames[]");
     }
-    // 例: https://.../solar_ch/ を返す
-    return u.toString();
-  })();
+    latestStr = m.latest; // YYYYMMDD
+    frames = m.frames;
 
-  badgeBase.textContent = `base: ${baseDir}`;
+    slider.max = frames.length - 1;
 
-  const manifestURL = new URL('manifest.json', baseDir).toString();
-  const imgURL = (date) => new URL(`imgs/${date}.png`, baseDir).toString();
+    // offset=0 を中心に
+    const zero = frames.findIndex(x => x.offset === 0);
+    idx = zero >= 0 ? zero : 0;
 
-  function setEnabled(on){
-    slider.disabled = !on;
-    btnPlay.disabled = !on;
-    btnPrev.disabled = !on;
-    btnNext.disabled = !on;
-  }
-
-  function stop(){
-    if (timer){ clearInterval(timer); timer = null; }
-    btnPlay.textContent = "▶";
-  }
-
-  function play(){
-    stop();
-    const ms = parseInt(speed.value,10);
-    timer = setInterval(()=>step(+1), ms);
-    btnPlay.textContent = "⏸";
-  }
-
-  function step(dir){
-    if (!frames.length) return;
-    idx = (idx + dir + frames.length) % frames.length;
+    computeRanges();
     update();
-  }
-
-  // 画像のonerror/ onload は1回だけ設定
-  img.addEventListener('error', () => {
-    const f = frames[idx];
-    const src = f ? imgURL(f.date) : '(unknown)';
-    status.textContent =
-      `IMAGE load failed\n` +
-      `src: ${src}\n` +
-      `→ ① docs/imgs/${f?.date}.png が本当にあるか\n` +
-      `→ ② Settings > Pages が /docs 公開になっているか\n` +
-      `→ ③ キャッシュなら Ctrl+F5`;
+  })
+  .catch(err=>{
+    note.textContent = "manifest.json load failed: " + err;
   });
-
-  img.addEventListener('load', () => {
-    // 読めたら status を update() 側の文に任せる（ここでは何もしない）
-  });
-
-  function update(){
-    if (!frames.length) return;
-    const f = frames[idx];
-
-    const src = imgURL(f.date);
-    img.src = src;
-
-    badgeDate.textContent = `UTC ${f.date}`;
-    badgeOffset.textContent = fmtOffset(f.offset);
-
-    if (f.type === "observed"){
-      badgeMode.textContent = "OBSERVED";
-      status.textContent =
-        `OK\n` +
-        `mode: observed\n` +
-        `src: ${src}`;
-    } else {
-      badgeMode.textContent = "FORECAST (27-day proxy)";
-      status.textContent =
-        `OK\n` +
-        `mode: forecast (proxy)\n` +
-        `src: ${src}\n` +
-        `note: future frames reuse 26–27 days before.`;
-    }
-
-    slider.value = idx;
-  }
-
-  // ====== wire ======
-  btnPlay.onclick = ()=> timer ? stop() : play();
-  btnPrev.onclick = ()=>{ stop(); step(-1); };
-  btnNext.onclick = ()=>{ stop(); step(+1); };
-  slider.oninput = e=>{ stop(); idx = +e.target.value; update(); };
-
-  speed.oninput = ()=>{ speedVal.textContent = `${speed.value} ms`; if(timer) play(); };
-
-  // ====== load manifest ======
-  status.textContent = `loading manifest...\n${manifestURL}`;
-  fetch(manifestURL, { cache: 'no-store' })
-    .then(r => {
-      if(!r.ok) throw new Error(`HTTP ${r.status} while loading manifest.json\n${manifestURL}`);
-      return r.json();
-    })
-    .then(m => {
-      if(!m.frames || !Array.isArray(m.frames) || m.frames.length===0){
-        throw new Error("manifest.json has no frames[]");
-      }
-      frames = m.frames;
-
-      slider.max = frames.length - 1;
-
-      const zero = frames.findIndex(x => x.offset === 0);
-      idx = zero >= 0 ? zero : 0;
-
-      setEnabled(true);
-      update();
-    })
-    .catch(err => {
-      setEnabled(false);
-      status.textContent =
-        `manifest.json load failed\n` +
-        `${err}\n\n` +
-        `Try open in browser:\n` +
-        `${manifestURL}\n\n` +
-        `If 404 → Settings > Pages の公開元が違う可能性大`;
-    });
-})();
 </script>
 </body>
 </html>
